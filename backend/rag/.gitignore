@@ -1,0 +1,13 @@
+# Ignore environment variables and API keys
+.env
+*.env
+
+# Ignore uploaded documents
+uploads/
+backend/uploads/
+
+# Standard Python cache & virtual environment files
+__pycache__/
+*.pyc
+.venv/
+venv/

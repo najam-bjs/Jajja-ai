@@ -1,79 +1,127 @@
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+import os
+from dotenv import load_dotenv
+
+# Provider SDK imports (safely wrapped so missing dependencies won't crash the server)
+try:
+    from google import genai
+except ImportError:
+    genai = None
+
+try:
+    import openai
+except ImportError:
+    openai = None
+
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
+
+load_dotenv()
+
+# Prioritized multi-provider pipeline using valid active model identifiers
+MODEL_PIPELINE = [
+    # --- Primary: Gemini Models ---
+    {"provider": "gemini", "model": "gemini-2.5-flash"},
+    {"provider": "gemini", "model": "gemini-2.0-flash"},
+    {"provider": "gemini", "model": "gemini-2.5-pro"},
+    {"provider": "gemini", "model": "gemini-1.5-flash"},
+
+    # --- Fallback 1: OpenAI (ChatGPT) ---
+    {"provider": "openai", "model": "gpt-4o-mini"},
+    {"provider": "openai", "model": "gpt-4o"},
+
+    # --- Fallback 2: Anthropic (Claude) ---
+    {"provider": "anthropic", "model": "claude-3-5-haiku-latest"},
+    {"provider": "anthropic", "model": "claude-3-5-sonnet-latest"},
+]
 
 
-MODEL_NAME = "google/flan-t5-small"
+def _call_gemini(model_name: str, prompt: str) -> str:
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY is not set in environment.")
+    if not genai:
+        raise ImportError("google-genai package is not installed.")
 
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME)
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model=model_name,
+        contents=prompt
+    )
+    return response.text
 
 
-def generate_answer(question, results):
+def _call_openai(model_name: str, prompt: str) -> str:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY is not set in environment.")
+    if not openai:
+        raise ImportError("openai package is not installed.")
+
+    client = openai.OpenAI(api_key=api_key)
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2
+    )
+    return response.choices[0].message.content
+
+
+def _call_anthropic(model_name: str, prompt: str) -> str:
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY is not set in environment.")
+    if not anthropic:
+        raise ImportError("anthropic package is not installed.")
+
+    client = anthropic.Anthropic(api_key=api_key)
+    response = client.messages.create(
+        model=model_name,
+        max_tokens=1000,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.content[0].text
+
+
+def generate_answer(question: str, results: list) -> str:
     context = "\n\n".join(
-        f"Page {result['page']}:\n{result['text']}"
+        f"[Page {result['page']}]: {result['text']}"
         for result in results
     )
 
     prompt = f"""
-Answer the question using ONLY the information provided in the context.
+You are JajjaAI, a document intelligence assistant.
 
-If the answer is not available in the context, say:
-The answer was not found in the provided document.
+Answer the question strictly based on the context provided below.
+
+Rules:
+- Give a direct, accurate, and concise answer.
+- Rely ONLY on the provided context. Do not invent details.
+- If the answer cannot be found in the context, reply exactly: "The answer was not found in the provided document."
 
 Context:
 {context}
 
 Question:
 {question}
-
-Answer:
 """
 
-    inputs = tokenizer(
-        prompt,
-        return_tensors="pt",
-        truncation=True
-    )
+    for item in MODEL_PIPELINE:
+        provider = item["provider"]
+        model_name = item["model"]
 
-    outputs = model.generate(
-        **inputs,
-        max_new_tokens=150
-    )
+        try:
+            print(f"Attempting response using [{provider.upper()}] model: {model_name}...")
 
-    answer = tokenizer.decode(
-        outputs[0],
-        skip_special_tokens=True
-    )
+            if provider == "gemini":
+                return _call_gemini(model_name, prompt)
+            elif provider == "openai":
+                return _call_openai(model_name, prompt)
+            elif provider == "anthropic":
+                return _call_anthropic(model_name, prompt)
 
-    return answer
+        except Exception as e:
+            print(f"[❌] Provider '{provider}' with model '{model_name}' failed. Reason: {str(e)}")
 
-if __name__ == "__main__":
-    from rag.pdf_loader import load_pdf
-    from rag.chunker import create_chunks
-    from rag.embeddings import create_embeddings
-    from rag.retriever import retrieve_chunks
-
-    pdf_path = "uploads/check.pdf"
-
-    pages = load_pdf(pdf_path)
-    chunks = create_chunks(pages)
-    embeddings = create_embeddings(chunks)
-
-    question = input("\nEnter your question: ")
-
-    results = retrieve_chunks(
-        question,
-        chunks,
-        embeddings
-    )
-
-    print("\nGenerating answer...")
-
-    answer = generate_answer(question, results)
-
-    print("\nAnswer:")
-    print(answer)
-
-    print("\nSources:")
-
-    for result in results:
-        print(f"Page {result['page']}")
+    return "All configured AI model providers (Gemini, ChatGPT, Claude) failed or are out of quota. Please check your API keys and rate limits."
