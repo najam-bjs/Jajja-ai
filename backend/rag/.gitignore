@@ -1,13 +1,9 @@
-# Ignore environment variables and API keys
+# Ignore all .env files anywhere in the project
+**/.env
 .env
-*.env
+backend/.env
+backend/rag/.env
 
-# Ignore uploaded documents
+# Ignore uploaded files
 uploads/
-backend/uploads/
-
-# Standard Python cache & virtual environment files
-__pycache__/
-*.pyc
-.venv/
-venv/
+**/uploads/
